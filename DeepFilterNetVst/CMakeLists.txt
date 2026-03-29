@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(DeepFilterNetVst VERSION 0.1.0 LANGUAGES C CXX RC)
+# 插件版本固定由源码文件维护；如需升级版本，请直接修改这里。
+set(DEEPFILTERNET_PLUGIN_VERSION "2026.3.29.1")
+
+if(NOT DEEPFILTERNET_PLUGIN_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR "DEEPFILTERNET_PLUGIN_VERSION must use the numeric format YYYY.M.D.N, e.g. 2026.3.29.1")
+endif()
+
+project(DeepFilterNetVst VERSION ${DEEPFILTERNET_PLUGIN_VERSION} LANGUAGES C CXX RC)
 
 set(JUCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extern/JUCE" CACHE PATH "Path to the JUCE repository")
 set(FST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extern/FST" CACHE PATH "Path to the FST repository")
@@ -45,6 +52,7 @@ add_subdirectory("${JUCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/JUCE")
 juce_set_vst2_sdk_path("${VST2_SDK_COMPAT_DIR}")
 
 juce_add_plugin(DeepFilterNetVst
+  VERSION "${PROJECT_VERSION}"
   COMPANY_NAME "DeepFilterNet"
   BUNDLE_ID "local.deepfilternet.plugin"
   IS_SYNTH FALSE

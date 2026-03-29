@@ -52,6 +52,22 @@ cmake --build build/juce-vst-msvc
 - `build/juce-vst-msvc/DeepFilterNetVst_artefacts/Release/VST/DeepFilterNet.dll`
 - `build/juce-vst-msvc/DeepFilterNetVst_artefacts/Release/VST3/DeepFilterNet.vst3`
 
+## GitHub CI
+
+- 已添加普通 CI 工作流：`.github/workflows/ci.yml`
+- 只要向任意分支 `push`，GitHub Actions 就会自动执行 Windows 构建检查并发布到 GitHub 发行版
+- 每次运行会更新对应分支的预发行版，并上传：
+  - `DeepFilterNet-分支名-v版本号-windows.zip`
+  - `DeepFilterNet-分支名-v版本号-windows.sha256`
+- 下载位置为仓库的 `Releases` 页面
+
+示例：
+
+```bash
+git push origin main
+git push origin feature/my-change
+```
+
 ## 运行方式
 
 - 插件首次加载时会把嵌入的 `df.dll` 和模型释放到系统临时目录缓存。

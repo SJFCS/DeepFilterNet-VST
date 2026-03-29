@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-package:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Derive build metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $branchName = "${{ github.ref_name }}"
+          $safeBranchName = $branchName -replace '[^0-9A-Za-z._-]', '-'
+          $cmakeText = Get-Content "DeepFilterNetVst/CMakeLists.txt" -Raw
+          $pluginVersionMatch = [regex]::Match($cmakeText, 'set\(DEEPFILTERNET_PLUGIN_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"\)')
+          if (-not $pluginVersionMatch.Success) {
+            throw "Failed to read DEEPFILTERNET_PLUGIN_VERSION from DeepFilterNetVst/CMakeLists.txt"
+          }
+          $pluginVersion = $pluginVersionMatch.Groups[1].Value
+          $releaseTag = "ci-$safeBranchName"
+          $releaseName = "CI $branchName"
+          $packageName = "DeepFilterNet-$safeBranchName-v$pluginVersion-windows"
+
+          "PACKAGE_NAME=$packageName" >> $env:GITHUB_ENV
+          "BUILD_DIR=build/juce-vst-release" >> $env:GITHUB_ENV
+          "RELEASE_TAG=$releaseTag" >> $env:GITHUB_ENV
+          "RELEASE_NAME=$releaseName" >> $env:GITHUB_ENV
+          "plugin_version=$pluginVersion" >> $env:GITHUB_OUTPUT
+          "package_name=$packageName" >> $env:GITHUB_OUTPUT
+          "build_dir=build/juce-vst-release" >> $env:GITHUB_OUTPUT
+          "branch_name=$safeBranchName" >> $env:GITHUB_OUTPUT
+          "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
+          "release_name=$releaseName" >> $env:GITHUB_OUTPUT
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S DeepFilterNetVst -B $env:BUILD_DIR -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build $env:BUILD_DIR --config Release --parallel
+
+      - name: Package release files
+        shell: pwsh
+        run: |
+          $distDir = Join-Path $PWD "dist"
+          $stageDir = Join-Path $distDir $env:PACKAGE_NAME
+          $zipPath = Join-Path $distDir ($env:PACKAGE_NAME + ".zip")
+          $hashPath = Join-Path $distDir ($env:PACKAGE_NAME + ".sha256")
+
+          Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+          Remove-Item $hashPath -Force -ErrorAction SilentlyContinue
+
+          New-Item -ItemType Directory -Path (Join-Path $stageDir "VST") -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $stageDir "VST3") -Force | Out-Null
+
+          Copy-Item "$env:BUILD_DIR/DeepFilterNetVst_artefacts/Release/VST/DeepFilterNet.dll" `
+            (Join-Path $stageDir "VST/DeepFilterNet.dll")
+          Copy-Item "$env:BUILD_DIR/DeepFilterNetVst_artefacts/Release/VST3/DeepFilterNet.vst3" `
+            (Join-Path $stageDir "VST3") -Recurse
+          Copy-Item "LICENSE" $stageDir
+          Copy-Item "README.md" $stageDir
+
+          Compress-Archive -Path $stageDir -DestinationPath $zipPath
+
+          $hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path $hashPath -Value "$hash *$($env:PACKAGE_NAME).zip"
+
+      - name: Publish rolling release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseTag = "${{ steps.meta.outputs.release_tag }}"
+          $releaseName = "${{ steps.meta.outputs.release_name }}"
+          $packageName = "${{ steps.meta.outputs.package_name }}"
+          $pluginVersion = "${{ steps.meta.outputs.plugin_version }}"
+          $zipPath = (Resolve-Path "dist/$packageName.zip").Path
+          $hashPath = (Resolve-Path "dist/$packageName.sha256").Path
+          $notesPath = Join-Path $PWD "dist/release-notes.txt"
+
+          @"
+          自动 CI 发行版
+
+          - 分支：${{ github.ref_name }}
+          - 提交：${{ github.sha }}
+          - 版本：v$pluginVersion
+          - 工作流：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          "@ | Set-Content -Path $notesPath -Encoding utf8
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f $releaseTag $env:GITHUB_SHA
+          git push origin "refs/tags/$releaseTag" --force
+
+          gh release view $releaseTag --repo $env:GITHUB_REPOSITORY *> $null
+          $releaseExists = ($LASTEXITCODE -eq 0)
+
+          if ($releaseExists) {
+            $releaseJson = gh release view $releaseTag --repo $env:GITHUB_REPOSITORY --json assets
+            $releaseInfo = $releaseJson | ConvertFrom-Json
+
+            if ($null -ne $releaseInfo.assets) {
+              foreach ($asset in $releaseInfo.assets) {
+                gh release delete-asset $releaseTag $asset.name --repo $env:GITHUB_REPOSITORY --yes
+              }
+            }
+
+            gh release edit $releaseTag `
+              --repo $env:GITHUB_REPOSITORY `
+              --title $releaseName `
+              --notes-file $notesPath `
+              --prerelease
+          }
+          else {
+            gh release create $releaseTag `
+              --repo $env:GITHUB_REPOSITORY `
+              --title $releaseName `
+              --notes-file $notesPath `
+              --prerelease
+          }
+
+          gh release upload $releaseTag $zipPath $hashPath `
+            --repo $env:GITHUB_REPOSITORY
