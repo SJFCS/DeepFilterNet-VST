@@ -10,10 +10,16 @@ const auto accent = juce::Colour::fromRGB(205, 101, 44);
 const auto accentSoft = juce::Colour::fromRGB(237, 189, 151);
 const auto textStrong = juce::Colour::fromRGB(41, 34, 29);
 const auto textMuted = juce::Colour::fromRGB(108, 96, 85);
+
+juce::String utf8Text(const char* text)
+{
+    return juce::String::fromUTF8(text);
+}
 }
 
 DeepFilterNetVstAudioProcessorEditor::AccentLookAndFeel::AccentLookAndFeel()
 {
+    setDefaultSansSerifTypefaceName("Microsoft YaHei");
     setColour(juce::Slider::thumbColourId, accent);
     setColour(juce::Slider::trackColourId, accent);
     setColour(juce::Slider::backgroundColourId, accentSoft.withAlpha(0.45f));
@@ -64,13 +70,13 @@ DeepFilterNetVstAudioProcessorEditor::DeepFilterNetVstAudioProcessorEditor(DeepF
     titleLabel_.setColour(juce::Label::textColourId, textStrong);
     addAndMakeVisible(titleLabel_);
 
-    subtitleLabel_.setText("Speech cleanup with direct denoise and post-filter control", juce::dontSendNotification);
+    subtitleLabel_.setText(utf8Text("语音降噪与后置滤波控制"), juce::dontSendNotification);
     subtitleLabel_.setFont(juce::FontOptions(14.0f, juce::Font::plain));
     subtitleLabel_.setColour(juce::Label::textColourId, textMuted);
     addAndMakeVisible(subtitleLabel_);
 
-    configureSlider(denoiseSlider_, denoiseLabel_, "Denoise Strength");
-    configureSlider(postSlider_, postLabel_, "Post Filter");
+    configureSlider(denoiseSlider_, denoiseLabel_, utf8Text("降噪强度"));
+    configureSlider(postSlider_, postLabel_, utf8Text("后置滤波"));
 
     for (auto* valueLabel : { &denoiseValueLabel_, &postValueLabel_ })
     {
@@ -161,20 +167,20 @@ void DeepFilterNetVstAudioProcessorEditor::updateStatusLabel()
 {
     if (processor_.getCurrentSampleRateHz() <= 0.0)
     {
-        statusLabel_.setText("Waiting for host playback configuration.", juce::dontSendNotification);
+        statusLabel_.setText(utf8Text("等待宿主播放配置。"), juce::dontSendNotification);
         return;
     }
 
     if (processor_.isSampleRateCompatible())
     {
-        const juce::String suffix = processor_.isDenoiserReady() ? "embedded runtime loaded" : "initializing embedded runtime";
-        statusLabel_.setText("48 kHz host rate detected, " + suffix + ".", juce::dontSendNotification);
+        const auto suffix = processor_.isDenoiserReady() ? utf8Text("运行时已加载") : utf8Text("正在初始化运行时");
+        statusLabel_.setText(utf8Text("宿主采样率为 48 kHz，") + suffix + utf8Text("。"), juce::dontSendNotification);
         return;
     }
 
-    const juce::String suffix = processor_.isDenoiserReady() ? "embedded runtime loaded" : "initializing embedded runtime";
-    statusLabel_.setText("Current host rate is " + juce::String(processor_.getCurrentSampleRateHz(), 1)
-                             + " Hz. The plugin resamples internally to 48 kHz, " + suffix + ".",
+    const auto suffix = processor_.isDenoiserReady() ? utf8Text("运行时已加载") : utf8Text("正在初始化运行时");
+    statusLabel_.setText(utf8Text("当前宿主采样率为 ") + juce::String(processor_.getCurrentSampleRateHz(), 1)
+                             + utf8Text(" Hz，插件会在内部重采样到 48 kHz，") + suffix + utf8Text("。"),
                          juce::dontSendNotification);
 }
 

@@ -6,6 +6,11 @@
 namespace
 {
 constexpr double targetSampleRate = 48000.0;
+
+juce::String utf8Text(const char* text)
+{
+    return juce::String::fromUTF8(text);
+}
 }
 
 DeepFilterNetVstAudioProcessor::DeepFilterNetVstAudioProcessor()
@@ -113,7 +118,7 @@ void DeepFilterNetVstAudioProcessor::setCurrentProgram(int index)
 const juce::String DeepFilterNetVstAudioProcessor::getProgramName(int index)
 {
     juce::ignoreUnused(index);
-    return "Default";
+    return utf8Text("默认");
 }
 
 void DeepFilterNetVstAudioProcessor::changeProgramName(int index, const juce::String& newName)
@@ -165,7 +170,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DeepFilterNetVstAudioProcess
 
     parameters.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID(attenParamId, 1),
-        "Denoise Strength",
+        utf8Text("降噪强度"),
         juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
         100.0f,
         juce::AudioParameterFloatAttributes().withStringFromValueFunction(
@@ -176,7 +181,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DeepFilterNetVstAudioProcess
 
     parameters.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID(postParamId, 1),
-        "Post Filter",
+        utf8Text("后置滤波"),
         juce::NormalisableRange<float>(0.0f, 0.05f, 0.0005f),
         0.0f,
         juce::AudioParameterFloatAttributes().withStringFromValueFunction(
