@@ -3,6 +3,7 @@
 #include "DenoiseEngine.h"
 
 #include <JuceHeader.h>
+#include <cstdint>
 
 class DeepFilterNetVstAudioProcessor final : public juce::AudioProcessor
 {
@@ -48,6 +49,7 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void publishSharedDiagnostics() const;
+    void removeSharedDiagnostics() const;
 
     dfvst::DenoiseEngine engine_;
     juce::AudioProcessorValueTreeState parameters_;
@@ -61,6 +63,8 @@ private:
     std::atomic<int> lastPreparedBlockSizeSamples_ { 0 };
     std::atomic<double> lastProcessSampleRateHz_ { 0.0 };
     std::atomic<int> lastProcessBlockSizeSamples_ { 0 };
+    uint32_t instanceSerial_ = 0;
+    uint64_t instanceId_ = 0;
 };
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();

@@ -1,5 +1,8 @@
 #include "PluginEditor.h"
 
+#include <utility>
+#include <vector>
+
 namespace
 {
 const auto backgroundTop = juce::Colour::fromRGB(10, 16, 28);
@@ -26,13 +29,14 @@ class DiagnosticContent final : public juce::Component,
                                 private juce::Timer
 {
 public:
-    static constexpr int preferredWidth = 560;
+    static constexpr int minPreferredWidth = 480;
+    static constexpr int maxPreferredWidth = 1000;
 
     explicit DiagnosticContent(DeepFilterNetVstAudioProcessor& processor)
         : processor_(processor)
     {
         viewport_.setViewedComponent(&display_, false);
-        viewport_.setScrollBarsShown(false, false, false, false);
+        viewport_.setScrollBarsShown(false, true, false, true);
         addAndMakeVisible(viewport_);
 
         refresh();
@@ -48,10 +52,18 @@ public:
 
     int getPreferredHeight() const
     {
-        return getContentHeightForWidth(preferredWidth);
+        return getContentHeightForWidth(getPreferredWidth());
     }
 
 private:
+    void restoreViewPosition(juce::Point<int> previousPosition)
+    {
+        const auto maxX = juce::jmax(0, display_.getWidth() - viewport_.getViewWidth());
+        const auto maxY = juce::jmax(0, display_.getHeight() - viewport_.getViewHeight());
+        viewport_.setViewPosition(juce::jlimit(0, maxX, previousPosition.x),
+                                  juce::jlimit(0, maxY, previousPosition.y));
+    }
+
     class DiagnosticDisplay final : public juce::Component
     {
     public:
@@ -65,59 +77,52 @@ private:
             repaint();
         }
 
+        int getPreferredWidth() const
+        {
+            const auto sectionCount = juce::jmax(1, static_cast<int>(sections_.size()));
+            return 20 + sectionCount * preferredCardWidth + juce::jmax(0, sectionCount - 1) * cardGap + 20;
+        }
+
         int getPreferredHeight(int width) const
         {
-            juce::ignoreUnused(width);
-            constexpr int headerHeight = 54;
-            constexpr int cardTopPadding = 58;
-            constexpr int cardBottomPadding = 24;
-            constexpr int rowHeight = 30;
-            const auto baseCardHeight = cardTopPadding + cardBottomPadding;
-            const auto localHeight = sections_.size() > 0
-                                         ? baseCardHeight + static_cast<int>(sections_[0].entries.size()) * rowHeight
-                                         : baseCardHeight;
-            const auto sharedHeight = sections_.size() > 1
-                                          ? baseCardHeight + static_cast<int>(sections_[1].entries.size()) * rowHeight
-                                          : baseCardHeight;
-
-            return 28 + headerHeight + 18 + juce::jmax(localHeight, sharedHeight) + 24;
+            return buildLayout(width).totalHeight;
         }
 
         void paint(juce::Graphics& graphics) override
         {
             graphics.fillAll(juce::Colours::transparentBlack);
 
-            const auto outerBounds = getLocalBounds().toFloat().reduced(2.0f);
-            const auto maxCardWidth = 620.0f;
-            auto bounds = outerBounds;
-
-            if (bounds.getWidth() > maxCardWidth)
-                bounds = juce::Rectangle<float>(maxCardWidth, bounds.getHeight()).withCentre(outerBounds.getCentre());
-
-            auto area = bounds.toNearestInt().reduced(10, 10);
+            auto area = getLocalBounds().reduced(10, 10);
+            const auto layout = buildLayout(getWidth());
 
             graphics.setColour(accent);
             graphics.setFont(juce::FontOptions("Microsoft YaHei", 22.0f, juce::Font::bold));
             graphics.drawText(utf8Text("运行信息"), area.removeFromTop(34), juce::Justification::centredLeft, false);
 
-            area.removeFromTop(6);
+            area.removeFromTop(10);
+            const auto sectionCount = juce::jmax(1, static_cast<int>(sections_.size()));
+            auto cardsArea = area.removeFromTop(layout.cardHeight);
 
-            auto cardsArea = area;
-            constexpr int cardGap = 10;
-            const auto cardWidth = (cardsArea.getWidth() - cardGap) / 2;
-            const auto leftCardHeight = getSectionCardHeight(sections_.size() > 0 ? sections_[0] : DiagnosticSection{ utf8Text("本地实例"), {} });
-            const auto rightCardHeight = getSectionCardHeight(sections_.size() > 1 ? sections_[1] : DiagnosticSection{ utf8Text("共享实例"), {} });
-            const auto cardHeight = juce::jmax(leftCardHeight, rightCardHeight);
-
-            auto leftCard = cardsArea.removeFromLeft(cardWidth).withHeight(cardHeight);
-            cardsArea.removeFromLeft(cardGap);
-            auto rightCard = cardsArea.withHeight(cardHeight);
-
-            paintSectionCard(graphics, leftCard, sections_.size() > 0 ? sections_[0] : DiagnosticSection{ utf8Text("本地实例"), {} });
-            paintSectionCard(graphics, rightCard, sections_.size() > 1 ? sections_[1] : DiagnosticSection{ utf8Text("共享实例"), {} });
+            for (int sectionIndex = 0; sectionIndex < sectionCount; ++sectionIndex)
+            {
+                auto cardArea = juce::Rectangle<int>(cardsArea.getX() + sectionIndex * (layout.cardWidth + cardGap),
+                                                     cardsArea.getY(),
+                                                     layout.cardWidth,
+                                                     layout.cardHeight);
+                paintSectionCard(graphics, cardArea, getSection(sectionIndex));
+            }
         }
 
     private:
+        static constexpr int cardGap = 12;
+        static constexpr int minCardWidth = 280;
+        static constexpr int preferredCardWidth = 332;
+        static constexpr int cardTopPadding = 12;
+        static constexpr int titleHeight = 42;
+        static constexpr int titleGap = 8;
+        static constexpr int rowHeight = 30;
+        static constexpr int cardBottomPadding = 12;
+
         struct DiagnosticEntry
         {
             juce::String key;
@@ -130,15 +135,28 @@ private:
             std::vector<DiagnosticEntry> entries;
         };
 
+        struct LayoutMetrics
+        {
+            int cardWidth = preferredCardWidth;
+            int cardHeight = 120;
+            int totalWidth = minCardWidth + 40;
+            int totalHeight = 120;
+        };
+
         static bool isSectionTitle(const juce::String& line)
         {
-            return line == utf8Text("本地实例") || line == utf8Text("共享实例");
+            return line.startsWith("### ");
+        }
+
+        static juce::String parseSectionTitle(const juce::String& line)
+        {
+            return line.fromFirstOccurrenceOf("### ", false, false).trim();
         }
 
         static std::pair<juce::String, juce::String> splitKeyValue(const juce::String& line)
         {
             auto colonIndex = line.indexOfChar(juce_wchar(0xff1a));
-            int separatorLength = 1;
+            constexpr int separatorLength = 1;
 
             if (colonIndex < 0)
                 colonIndex = line.indexOfChar(juce_wchar(':'));
@@ -167,7 +185,7 @@ private:
 
                 if (isSectionTitle(line))
                 {
-                    sections_.push_back({ line, {} });
+                    sections_.push_back({ parseSectionTitle(line), {} });
                     currentSection = &sections_.back();
                     continue;
                 }
@@ -178,6 +196,31 @@ private:
                 const auto [key, value] = splitKeyValue(line);
                 currentSection->entries.push_back({ key, value });
             }
+        }
+
+        const DiagnosticSection& getSection(int index) const
+        {
+            static const DiagnosticSection placeholder { utf8Text("运行信息"), {} };
+            return index >= 0 && index < static_cast<int>(sections_.size()) ? sections_[static_cast<size_t>(index)] : placeholder;
+        }
+
+        LayoutMetrics buildLayout(int width) const
+        {
+            LayoutMetrics layout;
+            const auto sectionCount = juce::jmax(1, static_cast<int>(sections_.size()));
+            const auto gapWidth = juce::jmax(0, sectionCount - 1) * cardGap;
+            const auto preferredCardsWidth = sectionCount * preferredCardWidth + gapWidth;
+            const auto availableCardsWidth = juce::jmax(minCardWidth, width - 40);
+
+            if (availableCardsWidth > preferredCardsWidth)
+                layout.cardWidth = juce::jmax(minCardWidth, (availableCardsWidth - gapWidth) / sectionCount);
+
+            for (int sectionIndex = 0; sectionIndex < sectionCount; ++sectionIndex)
+                layout.cardHeight = juce::jmax(layout.cardHeight, getSectionCardHeight(getSection(sectionIndex)));
+
+            layout.totalWidth = juce::jmax(width, 20 + sectionCount * layout.cardWidth + gapWidth + 20);
+            layout.totalHeight = 20 + 34 + 10 + layout.cardHeight + 20;
+            return layout;
         }
 
         static void paintSectionCard(juce::Graphics& graphics, juce::Rectangle<int> area, const DiagnosticSection& section)
@@ -192,9 +235,9 @@ private:
 
             graphics.setColour(accentBright);
             graphics.setFont(juce::FontOptions("Microsoft YaHei", 19.0f, juce::Font::bold));
-            graphics.drawText(section.title, content.removeFromTop(28), juce::Justification::centredLeft, false);
+            graphics.drawFittedText(section.title, content.removeFromTop(titleHeight), juce::Justification::centredLeft, 2, 0.92f);
 
-            content.removeFromTop(6);
+            content.removeFromTop(titleGap);
 
             const auto labelFont = juce::Font(juce::FontOptions("Microsoft YaHei", 16.0f, juce::Font::bold));
             const auto valueFont = juce::Font(juce::FontOptions("Microsoft YaHei", 16.0f, juce::Font::plain));
@@ -217,13 +260,7 @@ private:
 
         static int getSectionCardHeight(const DiagnosticSection& section)
         {
-            constexpr int topPadding = 12;
-            constexpr int titleHeight = 28;
-            constexpr int titleGap = 6;
-            constexpr int rowHeight = 30;
-            constexpr int bottomPadding = 12;
-
-            return topPadding + titleHeight + titleGap + static_cast<int>(section.entries.size()) * rowHeight + bottomPadding;
+            return cardTopPadding + titleHeight + titleGap + static_cast<int>(section.entries.size()) * rowHeight + cardBottomPadding;
         }
 
         juce::String text_;
@@ -240,32 +277,50 @@ private:
         const auto text = processor_.getDiagnosticText();
         if (text != lastText_)
         {
+            const auto previousViewPosition = viewport_.getViewPosition();
             lastText_ = text;
             display_.setDiagnosticText(lastText_);
             updatePreferredSize();
+            restoreViewPosition(previousViewPosition);
         }
     }
 
     void updateDisplayLayout()
     {
-        const auto width = viewport_.getWidth() > 0 ? viewport_.getWidth() : preferredWidth - 28;
+        const auto visibleWidth = viewport_.getMaximumVisibleWidth() > 0
+                                      ? viewport_.getMaximumVisibleWidth()
+                                      : minPreferredWidth - 28;
+        const auto width = juce::jmax(visibleWidth, display_.getPreferredWidth());
         const auto height = display_.getPreferredHeight(width);
         display_.setBounds(0, 0, width, height);
+    }
+
+    int getPreferredWidth() const
+    {
+        return juce::jlimit(minPreferredWidth, maxPreferredWidth, display_.getPreferredWidth() + 28);
     }
 
     int getContentHeightForWidth(int width) const
     {
         const auto viewportWidth = juce::jmax(200, width - 28);
-        return display_.getPreferredHeight(viewportWidth) + 28;
+        return display_.getPreferredHeight(viewportWidth) + 28 + viewport_.getScrollBarThickness();
     }
 
     void updatePreferredSize()
     {
-        const auto newWidth = preferredWidth;
-        const auto newHeight = getContentHeightForWidth(newWidth);
+        auto maxDisplayArea = juce::Rectangle<int>(0, 0, 1280, 900);
+        if (const auto* primaryDisplay = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+            maxDisplayArea = primaryDisplay->userArea;
 
-        if (getWidth() != newWidth || getHeight() != newHeight)
-            setSize(newWidth, newHeight);
+        const auto maxAllowedWidth = juce::jmax(minPreferredWidth,
+                                                juce::roundToInt(static_cast<float>(maxDisplayArea.getWidth()) * 0.92f));
+        const auto newWidth = juce::jmin(getPreferredWidth(), maxAllowedWidth);
+        const auto newHeight = getContentHeightForWidth(newWidth);
+        const auto clampedHeight = juce::jmin(newHeight,
+                                              juce::jmax(360, juce::roundToInt(static_cast<float>(maxDisplayArea.getHeight()) * 0.84f)));
+
+        if (getWidth() != newWidth || getHeight() != clampedHeight)
+            setSize(newWidth, clampedHeight);
         else
             updateDisplayLayout();
     }
