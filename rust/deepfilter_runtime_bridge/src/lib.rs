@@ -10,11 +10,10 @@ pub struct BridgeState {
 
 impl BridgeState {
     fn new(channels: usize, atten_lim_db: f32, post_filter_beta: f32, reduce_mask: i32) -> Option<Self> {
-        let mut runtime_params = RuntimeParams::default_with_ch(channels).with_atten_lim(atten_lim_db);
-
-        if post_filter_beta > 0.0 {
-            runtime_params = runtime_params.with_post_filter(post_filter_beta);
-        }
+        let mut runtime_params = RuntimeParams::default_with_ch(channels)
+            .with_atten_lim(atten_lim_db)
+            .with_thresholds(-15.0, 35.0, 35.0)
+            .with_post_filter(post_filter_beta);
 
         if let Ok(mask) = reduce_mask.try_into() {
             runtime_params = runtime_params.with_mask_reduce(mask);
