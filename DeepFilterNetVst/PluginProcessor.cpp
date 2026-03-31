@@ -18,6 +18,7 @@ namespace
 constexpr double targetSampleRate = 48000.0;
 constexpr float inputActivityThreshold = 1.0e-6f;
 constexpr double silentResetThresholdSeconds = 0.5;
+constexpr int sharedDiagnosticsRefreshIntervalMs = 250;
 constexpr int maxSharedDiagnosticInstances = 32;
 constexpr int64_t sharedDiagnosticMaxIdleMs = 10 * 60 * 1000;
 
@@ -247,6 +248,9 @@ public:
 
     std::vector<SharedDiagnosticEntry> readSnapshots() const
     {
+        if (state_ == nullptr)
+            return {};
+
         for (int attempt = 0; attempt < 8; ++attempt)
         {
             const auto begin = state_->sequence;
@@ -410,6 +414,50 @@ public:
 #endif
 }
 
+class DeepFilterNetVstAudioProcessor::SharedDiagnosticsPublisher final : private juce::Thread
+{
+public:
+    explicit SharedDiagnosticsPublisher(DeepFilterNetVstAudioProcessor& owner)
+        : juce::Thread("DeepFilterNet Shared Diagnostics"),
+          owner_(owner)
+    {
+        startThread();
+    }
+
+    ~SharedDiagnosticsPublisher() override
+    {
+        stop();
+    }
+
+    void requestRefresh()
+    {
+        refreshEvent_.signal();
+    }
+
+    void stop()
+    {
+        if (!isThreadRunning())
+            return;
+
+        signalThreadShouldExit();
+        refreshEvent_.signal();
+        stopThread(sharedDiagnosticsRefreshIntervalMs * 4);
+    }
+
+private:
+    void run() override
+    {
+        while (!threadShouldExit())
+        {
+            owner_.publishSharedDiagnostics();
+            refreshEvent_.wait(sharedDiagnosticsRefreshIntervalMs);
+        }
+    }
+
+    DeepFilterNetVstAudioProcessor& owner_;
+    juce::WaitableEvent refreshEvent_;
+};
+
 DeepFilterNetVstAudioProcessor::DeepFilterNetVstAudioProcessor()
     : AudioProcessor(BusesProperties()
                          .withInput("Input", juce::AudioChannelSet::stereo(), true)
@@ -421,11 +469,14 @@ DeepFilterNetVstAudioProcessor::DeepFilterNetVstAudioProcessor()
     reduceMaskParam_ = parameters_.getRawParameterValue(reduceMaskParamId);
     instanceSerial_ = allocateInstanceSerial();
     instanceId_ = createInstanceId(getCurrentProcessIdValue(), instanceSerial_);
-    publishSharedDiagnostics();
+    updateDiagnosticSnapshot(getSampleRate(), false);
+    sharedDiagnosticsPublisher_ = std::make_unique<SharedDiagnosticsPublisher>(*this);
+    requestSharedDiagnosticsPublish();
 }
 
 DeepFilterNetVstAudioProcessor::~DeepFilterNetVstAudioProcessor()
 {
+    sharedDiagnosticsPublisher_.reset();
     removeSharedDiagnostics();
 }
 
@@ -457,7 +508,8 @@ void DeepFilterNetVstAudioProcessor::prepareToPlay(double sampleRate, int sample
         setLatencySamples(engine_.getLatencySamples());
     }
 
-    publishSharedDiagnostics();
+    updateDiagnosticSnapshot(sampleRate, engine_.isReady());
+    requestSharedDiagnosticsPublish();
 }
 
 void DeepFilterNetVstAudioProcessor::releaseResources()
@@ -467,7 +519,8 @@ void DeepFilterNetVstAudioProcessor::releaseResources()
     engineResetForCurrentSilence_ = false;
     engine_.release();
     setLatencySamples(0);
-    publishSharedDiagnostics();
+    updateDiagnosticSnapshot(getSampleRate(), false);
+    requestSharedDiagnosticsPublish();
 }
 
 bool DeepFilterNetVstAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -499,6 +552,11 @@ void DeepFilterNetVstAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
                                  postFilterBetaParam_->load(),
                                  juce::roundToInt(reduceMaskParam_->load()));
 
+    const auto updateDiagnostics = [this]()
+    {
+        updateDiagnosticSnapshot(getSampleRate(), engine_.isReady());
+    };
+
     const auto hasRealInput = hasRealInputSignal(buffer, getTotalNumInputChannels());
 
     if (shouldDelayRuntimeInitialization(wrapperType) && !hasRealInput)
@@ -506,7 +564,7 @@ void DeepFilterNetVstAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         if (!engine_.isReady())
         {
             setLatencySamples(engine_.getLatencySamples());
-            publishSharedDiagnostics();
+            updateDiagnostics();
             return;
         }
 
@@ -525,7 +583,7 @@ void DeepFilterNetVstAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         {
             buffer.clear();
             setLatencySamples(engine_.getLatencySamples());
-            publishSharedDiagnostics();
+            updateDiagnostics();
             return;
         }
     }
@@ -537,7 +595,7 @@ void DeepFilterNetVstAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
 
     engine_.process(buffer);
     setLatencySamples(engine_.getLatencySamples());
-    publishSharedDiagnostics();
+    updateDiagnostics();
 }
 
 juce::AudioProcessorEditor* DeepFilterNetVstAudioProcessor::createEditor()
@@ -626,7 +684,7 @@ juce::AudioProcessorValueTreeState& DeepFilterNetVstAudioProcessor::getParameter
 
 double DeepFilterNetVstAudioProcessor::getCurrentSampleRateHz() const
 {
-    return getSampleRate();
+    return diagnosticCurrentSampleRateHz_.load();
 }
 
 bool DeepFilterNetVstAudioProcessor::isSampleRateCompatible() const
@@ -636,7 +694,7 @@ bool DeepFilterNetVstAudioProcessor::isSampleRateCompatible() const
 
 bool DeepFilterNetVstAudioProcessor::isDenoiserReady() const
 {
-    return engine_.isReady();
+    return diagnosticDenoiserReady_.load();
 }
 
 juce::String DeepFilterNetVstAudioProcessor::getDiagnosticText() const
@@ -676,7 +734,7 @@ juce::String DeepFilterNetVstAudioProcessor::getDiagnosticText() const
               + juce::String(lastProcessSampleRateHz_.load(), 1)
               + utf8Text(" Hz / ")
               + juce::String(lastProcessBlockSizeSamples_.load()));
-    lines.add(utf8Text("当前采样率查询值：") + juce::String(getSampleRate(), 1));
+    lines.add(utf8Text("当前采样率查询值：") + juce::String(getCurrentSampleRateHz(), 1));
     lines.add(utf8Text("运行时就绪：") + juce::String(isDenoiserReady() ? utf8Text("是") : utf8Text("否")));
 
     if (sharedEntries.empty())
@@ -716,8 +774,23 @@ juce::String DeepFilterNetVstAudioProcessor::getDiagnosticText() const
     return lines.joinIntoString("\n");
 }
 
+void DeepFilterNetVstAudioProcessor::requestSharedDiagnosticsPublish()
+{
+    if (sharedDiagnosticsPublisher_ != nullptr)
+        sharedDiagnosticsPublisher_->requestRefresh();
+}
+
+void DeepFilterNetVstAudioProcessor::updateDiagnosticSnapshot(double currentSampleRateHz, bool denoiserReady)
+{
+    diagnosticCurrentSampleRateHz_.store(currentSampleRateHz);
+    diagnosticDenoiserReady_.store(denoiserReady);
+}
+
 void DeepFilterNetVstAudioProcessor::publishSharedDiagnostics() const
 {
+    const auto currentSampleRateHz = diagnosticCurrentSampleRateHz_.load();
+    const auto denoiserReady = diagnosticDenoiserReady_.load();
+
     SharedDiagnosticsMapping::getInstance().writeSnapshot(instanceId_,
                                                           instanceSerial_,
                                                           static_cast<int>(wrapperType),
@@ -728,8 +801,8 @@ void DeepFilterNetVstAudioProcessor::publishSharedDiagnostics() const
                                                           lastPreparedBlockSizeSamples_.load(),
                                                           lastProcessSampleRateHz_.load(),
                                                           lastProcessBlockSizeSamples_.load(),
-                                                          getSampleRate(),
-                                                          isDenoiserReady());
+                                                          currentSampleRateHz,
+                                                          denoiserReady);
 }
 
 void DeepFilterNetVstAudioProcessor::removeSharedDiagnostics() const

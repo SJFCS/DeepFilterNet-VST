@@ -3,7 +3,9 @@
 #include "DenoiseEngine.h"
 
 #include <JuceHeader.h>
+#include <atomic>
 #include <cstdint>
+#include <memory>
 
 class DeepFilterNetVstAudioProcessor final : public juce::AudioProcessor
 {
@@ -47,7 +49,11 @@ public:
     static constexpr auto reduceMaskParamId = "reduceMask";
 
 private:
+    class SharedDiagnosticsPublisher;
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    void requestSharedDiagnosticsPublish();
+    void updateDiagnosticSnapshot(double currentSampleRateHz, bool denoiserReady);
     void publishSharedDiagnostics() const;
     void removeSharedDiagnostics() const;
 
@@ -63,10 +69,13 @@ private:
     std::atomic<int> lastPreparedBlockSizeSamples_ { 0 };
     std::atomic<double> lastProcessSampleRateHz_ { 0.0 };
     std::atomic<int> lastProcessBlockSizeSamples_ { 0 };
+    std::atomic<double> diagnosticCurrentSampleRateHz_ { 0.0 };
+    std::atomic<bool> diagnosticDenoiserReady_ { false };
     int64_t consecutiveSilentInputSamples_ = 0;
     bool engineResetForCurrentSilence_ = false;
     uint32_t instanceSerial_ = 0;
     uint64_t instanceId_ = 0;
+    std::unique_ptr<SharedDiagnosticsPublisher> sharedDiagnosticsPublisher_;
 };
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
