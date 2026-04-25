@@ -87,3 +87,43 @@ git push origin feature/my-change
 
 - 除第三方组件外，本仓库原创代码按 `AGPL-3.0-only` 提供，见 `LICENSE`。
 - 第三方依赖仍适用其各自上游许可证。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 🚀 运行步骤
+
+### 第 1 步：初始化 Git 子模块（必须）
+
+```bash
+git submodule update --init --recursive
+```
+
+### 第 2 步：确认 MSVC 编译器
+
+需要安装 Visual Studio Build Tools 2022（或完整版 VS2022），确保包含 "使用 C++ 的桌面开发" 工作负载。
+安装时勾选：
+- ✅ 使用 C++ 的桌面开发 (Desktop development with C++)
+- ✅ Windows 10/11 SDK
+- ✅ MSVC v143 构建工具
+
+### 第 3 步：构建项目
+
+```bash
+# rmdir /s /q build\juce-vst   
+cmake -S DeepFilterNetVst -B build/juce-vst -G "Visual Studio 17 2022" -A x64
+cmake --build build/juce-vst --config Release
+```
