@@ -423,7 +423,7 @@ void DeepFilterNetVstAudioProcessorEditor::AccentLookAndFeel::drawLinearSlider(
     graphics.fillRoundedRectangle(track.withWidth(clampedSliderPos - track.getX()), 5.0f);
 
     graphics.setColour(accent.withAlpha(0.14f));
-    graphics.fillEllipse(juce::Rectangle<float>(0.0f, 0.0f, 30.0f, 30.0f).withCentre({ clampedSliderPos, track.getCentreY() }));
+    graphics.fillEllipse(juce::Rectangle<float>(0.0f, 0.0f, 22.0f, 22.0f).withCentre({ clampedSliderPos, track.getCentreY() }));
 
     const auto thumb = juce::Rectangle<float>(0.0f, 0.0f, 18.0f, 18.0f).withCentre({ clampedSliderPos, track.getCentreY() });
     graphics.setColour(shadowColour.withAlpha(0.5f));
@@ -472,8 +472,12 @@ void DeepFilterNetVstAudioProcessorEditor::AccentLookAndFeel::drawComboBox(
 
     juce::ColourGradient comboGradient(background.brighter(0.08f), bounds.getX(), bounds.getY(),
                                        background.darker(0.14f), bounds.getRight(), bounds.getBottom(), false);
+
+    // 先填充透明背景，再绘制圆角矩形，避免白色正方形露出
+    juce::Path roundedRect;
+    roundedRect.addRoundedRectangle(bounds, radius);
     graphics.setGradientFill(comboGradient);
-    graphics.fillRoundedRectangle(bounds, radius);
+    graphics.fillPath(roundedRect);
 
     graphics.setColour(panelInner.withAlpha(0.95f));
     graphics.fillRoundedRectangle(arrowArea.reduced(4.0f, 4.0f), 10.0f);
@@ -519,8 +523,12 @@ void DeepFilterNetVstAudioProcessorEditor::AccentLookAndFeel::drawPopupMenuBackg
                                                                                        int width,
                                                                                        int height)
 {
+    // 使用与菜单项相同的背景色填充，避免白色矩形露出
+    graphics.fillAll(panelColour);
+    
     const auto bounds = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
-    graphics.fillAll(juce::Colours::transparentBlack);
+    
+    // 绘制圆角内边框效果
     juce::ColourGradient popupGradient(panelInner, bounds.getX(), bounds.getY(),
                                        panelColour, bounds.getRight(), bounds.getBottom(), false);
     graphics.setGradientFill(popupGradient);
@@ -556,7 +564,8 @@ void DeepFilterNetVstAudioProcessorEditor::AccentLookAndFeel::drawPopupMenuItem(
         return;
     }
 
-    auto row = area.reduced(6, 2);
+    // 均匀减少边距，确保文字垂直居中
+    auto row = area.reduced(8, 6);
     const auto isEnabled = isActive;
 
     if (isHighlighted && isEnabled)
@@ -577,13 +586,23 @@ void DeepFilterNetVstAudioProcessorEditor::AccentLookAndFeel::drawPopupMenuItem(
 
     if (isTicked)
     {
+        // 绘制背景圆圈
+        auto circleBounds = iconArea.toFloat().reduced(3.0f);
         graphics.setColour(accent);
-        graphics.fillEllipse(iconArea.toFloat().reduced(5.0f));
+        graphics.fillEllipse(circleBounds);
+
+        // 绘制对勾 - 使用相对 iconArea 的比例坐标
         graphics.setColour(juce::Colours::white);
         juce::Path tick;
-        tick.startNewSubPath(static_cast<float>(iconArea.getX() + 7), static_cast<float>(iconArea.getCentreY()));
-        tick.lineTo(static_cast<float>(iconArea.getX() + 10), static_cast<float>(iconArea.getBottom() - 8));
-        tick.lineTo(static_cast<float>(iconArea.getRight() - 6), static_cast<float>(iconArea.getY() + 7));
+        auto cx = static_cast<float>(iconArea.getCentreX());
+        auto cy = static_cast<float>(iconArea.getCentreY());
+        auto w = static_cast<float>(iconArea.getWidth());
+        auto h = static_cast<float>(iconArea.getHeight());
+
+        // 对勾的三个点：左下 -> 中间 -> 右上
+        tick.startNewSubPath(cx - w * 0.3f, cy + h * 0.05f);  // 左下
+        tick.lineTo(cx - w * 0.05f, cy + h * 0.3f);          // 中间（最低点）
+        tick.lineTo(cx + w * 0.35f, cy - h * 0.25f);         // 右上
         graphics.strokePath(tick, juce::PathStrokeType(1.8f, juce::PathStrokeType::JointStyle::curved, juce::PathStrokeType::EndCapStyle::rounded));
     }
 
@@ -796,8 +815,8 @@ void DeepFilterNetVstAudioProcessorEditor::paint(juce::Graphics& graphics)
     paintPanel(bottomPanel);
     paintPanel(modePanel);
 
-    graphics.setColour(accent.withAlpha(0.9f));
-    graphics.fillRoundedRectangle(24.0f, 22.0f, 86.0f, 6.0f, 3.0f);
+    // graphics.setColour(accent.withAlpha(0.9f));
+    // graphics.fillRoundedRectangle(24.0f, 22.0f, 86.0f, 6.0f, 3.0f);
     paintLanguageButton(graphics);
 }
 
