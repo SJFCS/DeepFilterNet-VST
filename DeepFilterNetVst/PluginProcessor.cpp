@@ -63,6 +63,23 @@ bool hasRealInputSignal(const juce::AudioBuffer<float>& buffer, int inputChannel
     return false;
 }
 
+// 检测并修复无效数据，防止 Studio One 停用插件
+void sanitizeOutputBuffer(juce::AudioBuffer<float>& buffer, int numChannels, int numSamples)
+{
+    for (int channel = 0; channel < numChannels; ++channel)
+    {
+        auto* channelData = buffer.getWritePointer(channel);
+        for (int sampleIndex = 0; sampleIndex < numSamples; ++sampleIndex)
+        {
+            float& sample = channelData[sampleIndex];
+            if (std::isnan(sample) || std::isinf(sample))
+            {
+                sample = 0.0f;
+            }
+        }
+    }
+}
+
 bool shouldDelayRuntimeInitialization(juce::AudioProcessor::WrapperType wrapperType)
 {
     return wrapperType == juce::AudioProcessor::wrapperType_VST;
@@ -590,6 +607,10 @@ void DeepFilterNetVstAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     }
 
     engine_.process(buffer);
+
+    // 检测并修复无效数据，防止 Studio One 停用插件
+    sanitizeOutputBuffer(buffer, buffer.getNumChannels(), buffer.getNumSamples());
+
     setLatencySamples(engine_.getLatencySamples());
     updateDiagnostics();
 }
@@ -729,30 +750,14 @@ bool DeepFilterNetVstAudioProcessor::isDenoiserReady() const
 juce::String DeepFilterNetVstAudioProcessor::getDiagnosticText(const juce::String& languageCode) const
 {
     juce::StringArray lines;
-    const juce::PluginHostType hostType;
     const auto normalisedLanguage = dfvst::localisation::normaliseLanguageCode(languageCode);
     auto sharedEntries = SharedDiagnosticsMapping::getInstance().readSnapshots();
-    std::sort(sharedEntries.begin(),
-              sharedEntries.end(),
-              [this](const SharedDiagnosticEntry& left, const SharedDiagnosticEntry& right)
-              {
-                  const auto leftIsLocal = left.instanceId == instanceId_;
-                  const auto rightIsLocal = right.instanceId == instanceId_;
 
-                  if (leftIsLocal != rightIsLocal)
-                      return leftIsLocal;
-
-                  if (left.writerProcessId != right.writerProcessId)
-                      return left.writerProcessId < right.writerProcessId;
-
-                  return left.instanceSerial < right.instanceSerial;
-              });
-
+    // 本地实例信息
     lines.add(makeSectionHeader(dfvst::localisation::tr(TextId::localInstanceSection, normalisedLanguage)
                                 + formatInstanceTag(getCurrentProcessIdValue(), instanceSerial_)));
     lines.add(dfvst::localisation::tr(TextId::instanceIdLabel, normalisedLanguage) + formatInstanceId(instanceId_));
     lines.add(dfvst::localisation::tr(TextId::processIdLabel, normalisedLanguage) + juce::String(static_cast<int>(getCurrentProcessIdValue())));
-    lines.add(dfvst::localisation::tr(TextId::hostLabel, normalisedLanguage) + getHostText(hostType, normalisedLanguage));
     lines.add(dfvst::localisation::tr(TextId::wrapperLabel, normalisedLanguage) + getWrapperTypeText(wrapperType, normalisedLanguage));
     lines.add(dfvst::localisation::tr(TextId::prepareToPlayCountLabel, normalisedLanguage) + juce::String(prepareToPlayCount_.load()));
     lines.add(dfvst::localisation::tr(TextId::processBlockCountLabel, normalisedLanguage) + juce::String(processBlockCount_.load()));
@@ -774,14 +779,15 @@ juce::String DeepFilterNetVstAudioProcessor::getDiagnosticText(const juce::Strin
         return lines.joinIntoString("\n");
     }
 
+    // 共享实例信息（排除本地实例）
     for (const auto& sharedEntry : sharedEntries)
     {
+        if (sharedEntry.instanceId == instanceId_)
+            continue;
+
         lines.add({});
         lines.add(makeSectionHeader(dfvst::localisation::tr(TextId::sharedInstanceSection, normalisedLanguage)
-                                    + formatInstanceTag(sharedEntry.writerProcessId, sharedEntry.instanceSerial)
-                                    + (sharedEntry.instanceId == instanceId_
-                                           ? dfvst::localisation::tr(TextId::localInstanceSuffix, normalisedLanguage)
-                                           : juce::String())));
+                                    + formatInstanceTag(sharedEntry.writerProcessId, sharedEntry.instanceSerial)));
         lines.add(dfvst::localisation::tr(TextId::instanceIdLabel, normalisedLanguage) + formatInstanceId(sharedEntry.instanceId));
         lines.add(dfvst::localisation::tr(TextId::processIdLabel, normalisedLanguage) + juce::String(static_cast<int>(sharedEntry.writerProcessId)));
         lines.add(dfvst::localisation::tr(TextId::wrapperLabel, normalisedLanguage)
@@ -800,10 +806,6 @@ juce::String DeepFilterNetVstAudioProcessor::getDiagnosticText(const juce::Strin
         lines.add(dfvst::localisation::tr(TextId::currentSampleRateLabel, normalisedLanguage) + juce::String(sharedEntry.currentSampleRateHz, 1));
         lines.add(dfvst::localisation::tr(TextId::runtimeReadyLabel, normalisedLanguage)
                   + dfvst::localisation::tr(sharedEntry.denoiserReady != 0 ? TextId::yes : TextId::no, normalisedLanguage));
-        lines.add(dfvst::localisation::tr(TextId::lastUpdatedLabel, normalisedLanguage)
-                  + (sharedEntry.lastUpdateTimeMs > 0
-                         ? juce::Time(sharedEntry.lastUpdateTimeMs).toString(true, true, true, true)
-                         : dfvst::localisation::tr(TextId::none, normalisedLanguage)));
     }
 
     return lines.joinIntoString("\n");
